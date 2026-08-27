@@ -16,7 +16,9 @@ import {
   Search,
   Sun,
   Moon,
-  Info
+  Info,
+  Clock,
+  Activity
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -38,9 +40,11 @@ import {
   checkProductNow, 
   pauseProduct, 
   resumeProduct, 
-  fetchProductHistory 
+  fetchProductHistory,
+  updateProduct,
+  fetchLogs 
 } from './services/api';
-import type { Monitor, Settings, HistoryEntry, ProductTestResponse } from './types';
+import type { Monitor, Settings, HistoryEntry, ProductTestResponse, LogEntry } from './types';
 
 // Simple toast implementation
 interface Toast {
@@ -77,6 +81,10 @@ export default function App() {
 
   // Toasts
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [blockedRecently, setBlockedRecently] = useState<boolean>(false);
+  const [intervalMinutes, setIntervalMinutes] = useState<string>('');
+  const [savingInterval, setSavingInterval] = useState<boolean>(false);
 
   const addToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = Math.random().toString(36).substring(2, 9);
@@ -146,6 +154,44 @@ export default function App() {
         .catch(() => addToast('Erro ao carregar histórico do gráfico', 'error'));
     }
   }, [selectedMonitor]);
+
+  // Logs do monitor (feed global) + polling
+  const loadLogs = async () => {
+    try {
+      const res = await fetchLogs(100);
+      setLogs(res.logs);
+      setBlockedRecently(res.blocked_recently);
+    } catch (err) {}
+  };
+
+  useEffect(() => {
+    loadLogs();
+    const t = setInterval(loadLogs, 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Sincroniza o editor de intervalo ao abrir um produto diferente
+  useEffect(() => {
+    if (selectedMonitor) {
+      setIntervalMinutes(String(Math.max(1, Math.round(selectedMonitor.check_interval / 60))));
+    }
+  }, [selectedMonitor?.id]);
+
+  const handleSaveInterval = async (minutes: number) => {
+    if (!selectedMonitor) return;
+    if (!minutes || minutes < 1) { addToast('Informe um intervalo em minutos (mínimo 1).', 'error'); return; }
+    try {
+      setSavingInterval(true);
+      const updated = await updateProduct(selectedMonitor.id, { check_interval: Math.round(minutes * 60) });
+      setSelectedMonitor(updated);
+      setMonitors(prev => prev.map(m => m.id === updated.id ? updated : m));
+      addToast(`Intervalo atualizado para ${minutes} min.`, 'success');
+    } catch (err: any) {
+      addToast(err.message || 'Erro ao atualizar intervalo', 'error');
+    } finally {
+      setSavingInterval(false);
+    }
+  };
 
   // Handle Testing URL
   const handleTestProduct = async (e: React.FormEvent) => {
@@ -495,6 +541,55 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Logs do Monitor */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-slate-400" />
+                    <h2 className="text-xl font-bold tracking-tight">Logs do Monitor</h2>
+                  </div>
+                  <button onClick={loadLogs} className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+                    <RefreshCw className="w-3.5 h-3.5" /> Atualizar
+                  </button>
+                </div>
+
+                {blockedRecently && (
+                  <div className="mb-4 bg-rose-50 border border-rose-200 dark:bg-rose-950/30 dark:border-rose-900/60 p-4 rounded-2xl flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-rose-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-sm font-bold text-rose-800 dark:text-rose-300">Possível bloqueio da Amazon</h4>
+                      <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">As últimas consultas retornaram bloqueio/CAPTCHA (HTTP 403/429). O IP do servidor pode estar sendo barrado. Considere aumentar o intervalo ou usar um proxy.</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="max-h-[320px] overflow-y-auto space-y-2">
+                  {logs.length === 0 ? (
+                    <span className="text-xs text-slate-400 block text-center py-8">Nenhum log ainda. Assim que o monitor fizer consultas, elas aparecem aqui.</span>
+                  ) : (
+                    logs.map((log, idx) => (
+                      <div key={idx} className="flex items-start gap-3 text-xs p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800/50">
+                        <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${
+                          log.level === 'success' ? 'bg-emerald-500'
+                          : log.level === 'warning' ? 'bg-amber-500'
+                          : log.level === 'blocked' ? 'bg-rose-600'
+                          : 'bg-rose-400'
+                        }`}></span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-slate-700 dark:text-slate-300 truncate">{log.name}</span>
+                            <span className="text-[10px] text-slate-400 flex-shrink-0">{new Date(log.time).toLocaleString('pt-BR')}</span>
+                          </div>
+                          <span className={`block mt-0.5 ${log.level === 'blocked' || log.level === 'error' ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                            {log.level === 'blocked' ? '🚫 ' : ''}{log.message}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
               {/* Monitors List */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
@@ -791,6 +886,39 @@ export default function App() {
                           : 'Agendamento Pausado'}
                       </span>
                     </div>
+                  </div>
+
+                  {/* Editor de intervalo (delay) por produto */}
+                  <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Clock className="w-4 h-4 text-slate-400" />
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Intervalo de Verificação</span>
+                      <span className="text-[11px] text-slate-500">(atual: a cada {Math.max(1, Math.round(selectedMonitor.check_interval / 60))} min)</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {[5, 15, 30, 60, 120, 360].map(min => (
+                        <button key={min} onClick={() => handleSaveInterval(min)} disabled={savingInterval}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition disabled:opacity-50 ${
+                            Math.round(selectedMonitor.check_interval / 60) === min
+                              ? 'bg-amber-500 text-white border-amber-500'
+                              : 'border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}>
+                          {min < 60 ? `${min} min` : `${min / 60} h`}
+                        </button>
+                      ))}
+                      <div className="flex items-center gap-1.5 ml-1">
+                        <input type="number" min={1} value={intervalMinutes}
+                          onChange={(e) => setIntervalMinutes(e.target.value)}
+                          className="w-20 px-2 py-1.5 rounded-lg text-xs border border-slate-200 dark:border-slate-700 bg-transparent"
+                          placeholder="min" />
+                        <span className="text-xs text-slate-400">min</span>
+                        <button onClick={() => handleSaveInterval(Number(intervalMinutes))} disabled={savingInterval || !intervalMinutes}
+                          className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 disabled:opacity-50">
+                          {savingInterval ? 'Salvando...' : 'Salvar'}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-2">Intervalos muito curtos aumentam o risco de bloqueio pela Amazon. Recomendado: 30 min ou mais.</p>
                   </div>
                 </div>
               </div>

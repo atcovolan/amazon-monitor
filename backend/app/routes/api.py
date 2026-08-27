@@ -296,6 +296,13 @@ def resume_product(
         masked["discord_webhook"] = mask_webhook_url(updated["discord_webhook"])
     return masked
 
+@router.get("/logs")
+def get_logs(limit: int = 100, storage: JsonStorage = Depends(get_storage)):
+    logs = storage.get_logs(limit=limit)
+    blocked_recently = any(l.get("level") == "blocked" for l in logs[:20])
+    return {"logs": logs, "blocked_recently": blocked_recently}
+
+
 @router.get("/products/{product_id}/history")
 def get_product_history(product_id: str, storage: JsonStorage = Depends(get_storage)):
     monitor = storage.get_monitor(product_id)

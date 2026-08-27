@@ -1,4 +1,4 @@
-import type { Monitor, Settings, HistoryEntry, ProductTestResponse } from '../types';
+import type { Monitor, Settings, HistoryEntry, ProductTestResponse, LogsResponse } from '../types';
 
 const API_BASE = '/api';
 
@@ -107,5 +107,11 @@ export async function resumeProduct(id: string): Promise<Monitor> {
 export async function fetchProductHistory(id: string): Promise<HistoryEntry[]> {
   const res = await fetch(`${API_BASE}/products/${id}/history`);
   if (!res.ok) throw new Error('Falha ao buscar histórico');
+  return res.json();
+}
+
+export async function fetchLogs(limit = 100): Promise<LogsResponse> {
+  const res = await fetch(`${API_BASE}/logs?limit=${limit}`);
+  if (!res.ok) throw new Error('Falha ao obter logs');
   return res.json();
 }

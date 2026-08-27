@@ -28,6 +28,7 @@ data/settings.json
 data/monitors.json
 data/history/*.json
 data/backups/*.json
+data/logs.json
 
 # Frontend
 node_modules/

@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 # requisicao travou (bloqueio/desafio da Amazon ao IP do servidor) e abortamos.
 SCRAPE_TIMEOUT_SECONDS = 25
 
+# Trechos que indicam bloqueio/banimento da Amazon ao IP do servidor.
+BLOCK_MARKERS = ("403", "429", "captcha", "robo", "rob\u00f4", "bloque",
+                 "verificacao", "verifica\u00e7\u00e3o", "anti-robo")
+
 
 def _scrape_product_worker(url):
     # Executa em um PROCESSO separado, para que um scraping travado/bloqueante
@@ -190,10 +194,42 @@ class MonitorService:
             update_data["last_error_at"] = datetime.now().isoformat()
             logger.error(f"[{datetime.now().strftime('%H:%M:%S')}] ERROR {monitor['asin']} - {e}")
             
+        # Registrar no log do monitor (feed global do dashboard)
+        self._log_check_result(monitor, update_data)
+
         # Update details in storage
         updated = self.storage.update_monitor(monitor_id, update_data)
         self._update_next_check_time(monitor_id)
         return updated
+
+    def _log_check_result(self, monitor: Dict[str, Any], update_data: Dict[str, Any]) -> None:
+        status = update_data.get("status")
+        err = update_data.get("last_error")
+        if err:
+            low = str(err).lower()
+            blocked = any(m in low for m in BLOCK_MARKERS)
+            level = "blocked" if blocked else "error"
+            message = str(err)
+        elif status == "out_of_stock":
+            level = "warning"
+            message = "Indisponivel / sem estoque"
+        else:
+            price = update_data.get("current_price")
+            price_txt = ("R$ %.2f" % price).replace(".", ",") if price is not None else "preco OK"
+            extra = " - PRECO ALVO ATINGIDO" if status == "target_reached" else ""
+            level = "success"
+            message = f"Consulta OK - {price_txt}{extra}"
+        try:
+            self.storage.append_log({
+                "time": datetime.now().isoformat(),
+                "monitor_id": monitor.get("id"),
+                "name": monitor.get("name", "?"),
+                "asin": monitor.get("asin", "?"),
+                "level": level,
+                "message": message,
+            })
+        except Exception as e:
+            logger.error(f"Falha ao gravar log do monitor: {e}")
 
     async def check_now(self, monitor_id: str) -> Optional[Dict[str, Any]]:
         # Manual check ignores scheduler, run immediately

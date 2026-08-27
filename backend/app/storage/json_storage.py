@@ -23,6 +23,7 @@ class JsonStorage(StorageInterface):
         
         self.monitors_file = os.path.join(self.data_dir, "monitors.json")
         self.settings_file = os.path.join(self.data_dir, "settings.json")
+        self.logs_file = os.path.join(self.data_dir, "logs.json")
         
         self.lock = RLock()  # reentrante: get_monitor() chama get_monitors()
         self._ensure_dirs_and_files()
@@ -205,3 +206,28 @@ class JsonStorage(StorageInterface):
                 except Exception:
                     return []
             return []
+
+    def append_log(self, entry: Dict[str, Any]) -> None:
+        with self.lock:
+            logs = []
+            if os.path.exists(self.logs_file):
+                try:
+                    data = self._read_json(self.logs_file)
+                    logs = data.get("logs", []) if isinstance(data, dict) else []
+                except Exception:
+                    logs = []
+            logs.append(entry)
+            if len(logs) > 500:
+                logs = logs[-500:]
+            self._write_atomic(self.logs_file, {"logs": logs})
+
+    def get_logs(self, limit: int = 100) -> List[Dict[str, Any]]:
+        with self.lock:
+            if not os.path.exists(self.logs_file):
+                return []
+            try:
+                data = self._read_json(self.logs_file)
+                logs = data.get("logs", []) if isinstance(data, dict) else []
+            except Exception:
+                return []
+            return list(reversed(logs))[:limit]

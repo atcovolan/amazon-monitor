@@ -38,6 +38,20 @@ export interface HistoryEntry {
   checked_at: string;
 }
 
+export interface LogEntry {
+  time: string;
+  monitor_id?: string;
+  name: string;
+  asin: string;
+  level: 'success' | 'warning' | 'error' | 'blocked';
+  message: string;
+}
+
+export interface LogsResponse {
+  logs: LogEntry[];
+  blocked_recently: boolean;
+}
+
 export interface ProductTestResponse {
   title: string;
   price?: number;
