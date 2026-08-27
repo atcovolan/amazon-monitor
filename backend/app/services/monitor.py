@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
@@ -131,9 +132,10 @@ class MonitorService:
                     if not alert_triggered:
                         # Send alert
                         settings = self.storage.get_settings()
-                        webhook = settings.get("discord_webhook")
+                        default_webhook = os.environ.get("DISCORD_WEBHOOK") or settings.get("discord_webhook")
+                        webhook = default_webhook
                         if not monitor.get("use_default_webhook"):
-                            webhook = monitor.get("discord_webhook")
+                            webhook = monitor.get("discord_webhook") or default_webhook
                             
                         if webhook:
                             # Send in background or awaitable

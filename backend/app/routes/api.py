@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -30,16 +31,22 @@ def get_monitor_service() -> MonitorService:
 @router.get("/settings", response_model=SettingsResponse)
 def get_settings(storage: JsonStorage = Depends(get_storage)):
     settings = storage.get_settings()
-    # Mask webhook URL for safety
+    # Mask webhook URL for safety. If DISCORD_WEBHOOK env var is set,
+    # it is the source of truth and is shown (masked) here.
     masked_settings = {**settings}
-    if settings.get("discord_webhook"):
-        masked_settings["discord_webhook"] = mask_webhook_url(settings["discord_webhook"])
+    effective_webhook = os.environ.get("DISCORD_WEBHOOK") or settings.get("discord_webhook")
+    masked_settings["discord_webhook"] = mask_webhook_url(effective_webhook) if effective_webhook else None
     return masked_settings
 
 @router.put("/settings", response_model=SettingsResponse)
 def update_settings(payload: SettingsUpdate, storage: JsonStorage = Depends(get_storage)):
     update_dict = payload.model_dump(exclude_unset=True)
     
+    # If the webhook is configured via the DISCORD_WEBHOOK env var, it wins
+    # and cannot be overridden from the UI.
+    if os.environ.get("DISCORD_WEBHOOK"):
+        update_dict.pop("discord_webhook", None)
+
     # If the user edited webhook and passed masked string, ignore it (keep original)
     if "discord_webhook" in update_dict:
         new_webhook = update_dict["discord_webhook"]

@@ -57,7 +57,7 @@ class AmazonScraper:
                 normalized,
                 headers=self.headers,
                 impersonate="chrome",
-                timeout=30
+                timeout=12
             )
             
             if response.status_code == 403:
@@ -67,11 +67,29 @@ class AmazonScraper:
             if response.status_code != 200:
                 raise Exception(f"Erro HTTP {response.status_code} ao acessar a Amazon")
                 
+            if self._looks_like_captcha(response.text):
+                raise Exception(
+                    "Amazon exigiu verificacao anti-robo (CAPTCHA). "
+                    "Provavel bloqueio do IP do servidor (datacenter)."
+                )
+
             return self.parse_html(response.text, normalized, asin)
             
         except Exception as e:
             logger.error(f"Erro ao obter produto da Amazon ({asin}): {e}")
             raise e
+
+    def _looks_like_captcha(self, html: str) -> bool:
+        markers = [
+            "api-services-support@amazon.com",
+            "To discuss automated access",
+            "Type the characters you see in this image",
+            "Enter the characters you see below",
+            "not a robot",
+            "/errors/validateCaptcha",
+        ]
+        low = html.lower()
+        return any(m.lower() in low for m in markers)
 
     def parse_html(self, html: str, url: str, asin: str) -> Dict[str, Any]:
         soup = BeautifulSoup(html, "html.parser")
