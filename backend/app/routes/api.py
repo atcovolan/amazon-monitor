@@ -77,7 +77,7 @@ def get_products(storage: JsonStorage = Depends(get_storage)):
     return masked_monitors
 
 @router.post("/products", response_model=MonitorResponse)
-def create_product(
+async def create_product(
     payload: MonitorCreate,
     storage: JsonStorage = Depends(get_storage),
     monitor_srv: MonitorService = Depends(get_monitor_service)
@@ -94,10 +94,9 @@ def create_product(
         if m.get("asin") == asin:
             raise HTTPException(status_code=400, detail=f"Já existe um monitor ativo para o ASIN {asin}.")
 
-    # Scrape initially to get fresh details
-    scraper = AmazonScraper()
+    # Scrape inicial (processo isolado + timeout rigido)
     try:
-        scraped = scraper.get_product(url)
+        scraped = await monitor_srv.scrape_product(url)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Erro ao validar produto na Amazon: {str(e)}")
 
@@ -209,16 +208,18 @@ def delete_product(
     return {"message": "Monitor removido com sucesso."}
 
 @router.post("/products/test", response_model=ProductTestResponse)
-def test_product(payload: ProductTestRequest):
+async def test_product(
+    payload: ProductTestRequest,
+    monitor_srv: MonitorService = Depends(get_monitor_service)
+):
     url = payload.url
     asin = extract_asin(url)
     normalized = normalize_amazon_url(url)
     if not asin or not normalized:
         raise HTTPException(status_code=400, detail="URL inválida. Não foi possível extrair o ASIN.")
         
-    scraper = AmazonScraper()
     try:
-        scraped = scraper.get_product(url)
+        scraped = await monitor_srv.scrape_product(url)
         return {
             "title": scraped["title"],
             "price": float(scraped["price"]) if scraped["price"] is not None else None,

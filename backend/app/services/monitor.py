@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import concurrent.futures
+import multiprocessing as mp
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
@@ -11,6 +13,18 @@ from backend.app.services.discord import send_price_alert
 
 logger = logging.getLogger(__name__)
 
+# Limite rigido para um unico scraping. Alem disso assumimos que a
+# requisicao travou (bloqueio/desafio da Amazon ao IP do servidor) e abortamos.
+SCRAPE_TIMEOUT_SECONDS = 25
+
+
+def _scrape_product_worker(url):
+    # Executa em um PROCESSO separado, para que um scraping travado/bloqueante
+    # nunca consiga congelar o event loop do app. Cria seu proprio scraper.
+    scraper = AmazonScraper()
+    return scraper.get_product(url)
+
+
 class MonitorService:
     def __init__(self, storage: JsonStorage, max_concurrent: int = 3):
         self.storage = storage
@@ -18,6 +32,35 @@ class MonitorService:
         self.scheduler = AsyncIOScheduler()
         self.semaphore = asyncio.Semaphore(max_concurrent)
         self.running = False
+        # Scrapes rodam em processo separado (spawn) para que o curl_cffi/libcurl
+        # nunca segure o GIL do processo web nem trave o event loop.
+        self._mp_ctx = mp.get_context("spawn")
+        self._scrape_executor = concurrent.futures.ProcessPoolExecutor(
+            max_workers=1, mp_context=self._mp_ctx
+        )
+
+    async def scrape_product(self, url):
+        # Scraping isolado com timeout rigido. Levanta excecao em caso de
+        # timeout/erro, para o chamador exibir um erro limpo em vez de travar.
+        loop = asyncio.get_running_loop()
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(self._scrape_executor, _scrape_product_worker, url),
+                timeout=SCRAPE_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, concurrent.futures.process.BrokenProcessPool):
+            # Recicla o pool para um worker travado nao bloquear checagens futuras.
+            old = self._scrape_executor
+            self._scrape_executor = concurrent.futures.ProcessPoolExecutor(
+                max_workers=1, mp_context=self._mp_ctx
+            )
+            try:
+                old.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            raise Exception(
+                "Tempo esgotado ao consultar a Amazon (provavel bloqueio do IP do servidor)."
+            )
 
     def start(self):
         if not self.running:
@@ -31,6 +74,10 @@ class MonitorService:
             self.scheduler.shutdown()
             self.running = False
             logger.info("Scheduler finalizado.")
+        try:
+            self._scrape_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
     def _load_active_jobs(self):
         monitors = self.storage.get_monitors()
@@ -94,9 +141,8 @@ class MonitorService:
         }
         
         try:
-            # Run scraper in a thread pool executor since it uses blocking requests
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, self.scraper.get_product, url)
+            # Scraping em processo separado com timeout rigido (nunca trava o app).
+            result = await self.scrape_product(url)
             
             scraped_price = result["price"] # Decimal or None
             availability = result["availability"]
