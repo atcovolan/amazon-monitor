@@ -106,27 +106,8 @@ class AmazonScraper:
         if not title:
             title = f"Produto Amazon {asin}"
             
-        # 2. Extrair Preço
-        price = None
-        price_selectors = [
-            "#corePriceDisplay_desktop_feature_div span.a-price span.a-offscreen",
-            "#corePrice_feature_div span.a-price span.a-offscreen",
-            ".a-price .a-offscreen",
-            "#priceblock_ourprice",
-            "#priceblock_dealprice",
-            "#price_inside_buybox",
-            "#newBuyBoxPrice",
-            "span.a-color-price"
-        ]
-        
-        for sel in price_selectors:
-            price_el = soup.select_one(sel)
-            if price_el:
-                price_str = price_el.get_text(strip=True)
-                parsed_price = self.clean_price(price_str)
-                if parsed_price is not None:
-                    price = parsed_price
-                    break
+        # 2. Extrair Preço (preco principal de compra, ignorando parcelas)
+        price = self._extract_price(soup)
                     
         # 3. Extrair Imagem
         image_url = None
@@ -167,6 +148,68 @@ class AmazonScraper:
             "asin": asin,
             "url": url
         }
+
+    def _price_from_a_price(self, a_price_el) -> Optional[Decimal]:
+        # Preco a partir de um <span class="a-price">: usa .a-offscreen se tiver
+        # valor; senao reconstroi de .a-price-whole + .a-price-fraction (HTML cru).
+        off = a_price_el.select_one(".a-offscreen")
+        if off:
+            p = self.clean_price(off.get_text(strip=True))
+            if p is not None:
+                return p
+        whole = a_price_el.select_one(".a-price-whole")
+        if whole:
+            whole_txt = whole.get_text(strip=True)
+            frac_el = a_price_el.select_one(".a-price-fraction")
+            frac_txt = frac_el.get_text(strip=True) if frac_el else "00"
+            sep = "" if whole_txt.endswith((",", ".")) else ","
+            return self.clean_price(f"{whole_txt}{sep}{frac_txt}")
+        return None
+
+    def _extract_price(self, soup) -> Optional[Decimal]:
+        # Prioriza o preco de compra (priceToPay / base), ignorando parcelas
+        # (apex-priceperunit-value) e o preco 'de' riscado (data-a-color=secondary).
+        priority = [
+            "span.a-price.priceToPay",
+            "span.a-price.apex-pricetopay-value",
+            "#corePriceDisplay_desktop_feature_div span.a-price[data-a-color='base']:not(.apex-priceperunit-value)",
+            "#corePrice_feature_div span.a-price[data-a-color='base']:not(.apex-priceperunit-value)",
+            "#apex_desktop span.a-price[data-a-color='base']:not(.apex-priceperunit-value)",
+            "#buybox span.a-price:not(.apex-priceperunit-value)",
+            "span.a-price[data-a-color='base']:not(.apex-priceperunit-value)",
+        ]
+        for sel in priority:
+            try:
+                els = soup.select(sel)
+            except Exception:
+                els = []
+            for el in els:
+                classes = el.get("class") or []
+                if "apex-priceperunit-value" in classes:
+                    continue
+                p = self._price_from_a_price(el)
+                if p is not None and p > 0:
+                    return p
+        # Fallbacks (layouts antigos), pulando parcelas
+        fallback = [
+            "#priceblock_ourprice",
+            "#priceblock_dealprice",
+            "#price_inside_buybox",
+            "#newBuyBoxPrice",
+            ".a-price .a-offscreen",
+        ]
+        for sel in fallback:
+            try:
+                els = soup.select(sel)
+            except Exception:
+                els = []
+            for el in els:
+                if el.find_parent(class_="apex-priceperunit-value"):
+                    continue
+                p = self.clean_price(el.get_text(strip=True))
+                if p is not None and p > 0:
+                    return p
+        return None
 
     def clean_price(self, price_str: str) -> Optional[Decimal]:
         try:
