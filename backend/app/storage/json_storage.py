@@ -2,7 +2,7 @@ import os
 import json
 import shutil
 import logging
-from threading import Lock
+from threading import RLock
 from typing import Dict, Any, List, Optional
 from backend.app.storage.base import StorageInterface
 
@@ -24,7 +24,7 @@ class JsonStorage(StorageInterface):
         self.monitors_file = os.path.join(self.data_dir, "monitors.json")
         self.settings_file = os.path.join(self.data_dir, "settings.json")
         
-        self.lock = Lock()
+        self.lock = RLock()  # reentrante: get_monitor() chama get_monitors()
         self._ensure_dirs_and_files()
 
     def _ensure_dirs_and_files(self):
