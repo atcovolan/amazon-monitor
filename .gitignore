@@ -1,0 +1,46 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.gitattributes
+
+# Environments
+.env
+.env.local
+.env.*.local
+
+# JSON Data (local users data)
+data/settings.json
+data/monitors.json
+data/history/*.json
+data/backups/*.json
+
+# Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+
+# IDEs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
