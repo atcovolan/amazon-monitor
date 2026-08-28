@@ -128,16 +128,30 @@ class AmazonScraper:
                 if image_url:
                     break
                     
-        # 4. Disponibilidade
+        # 4. Disponibilidade — multiplos sinais para robustez
         availability = True
-        avail_el = soup.select_one("#availability")
-        if avail_el:
-            avail_text = avail_el.get_text(strip=True).lower()
-            if "indispon" in avail_text or "out of stock" in avail_text or "não disponível" in avail_text:
-                availability = False
-        else:
-            outofstock_el = soup.select_one("#outOfStock")
-            if outofstock_el:
+        unavail_keywords = (
+            "indispon", "out of stock", "não disponível",
+            "nao disponivel", "currently unavailable",
+            "não temos previsão", "nao temos previsao",
+        )
+        
+        # Checar #availability e #outOfStock (podem coexistir)
+        for avail_sel in ("#availability", "#outOfStock"):
+            avail_el = soup.select_one(avail_sel)
+            if avail_el:
+                avail_text = avail_el.get_text(strip=True).lower()
+                if any(kw in avail_text for kw in unavail_keywords):
+                    availability = False
+                    break
+        
+        # Sinal extra: se nao tem botao de compra, produto indisponivel
+        if availability:
+            has_add_to_cart = soup.select_one("#add-to-cart-button")
+            has_buy_now = soup.select_one("#buy-now-button")
+            has_submit_add = soup.select_one("#submit\\.add-to-cart, input[name='submit.add-to-cart']")
+            if not has_add_to_cart and not has_buy_now and not has_submit_add:
+                # Sem nenhum botao de compra — considerar indisponivel
                 availability = False
                 
         return {
@@ -166,17 +180,42 @@ class AmazonScraper:
             return self.clean_price(f"{whole_txt}{sep}{frac_txt}")
         return None
 
+    # Containers conhecidos do buybox — precos fora deles sao de
+    # carrosseis, produtos similares, "outros vendedores", etc.
+    _BUYBOX_CONTAINERS = (
+        "#corePriceDisplay_desktop_feature_div",
+        "#corePrice_feature_div",
+        "#apex_desktop",
+        "#buybox",
+        "#buyBoxAccordion",
+        "#qualifiedBuybox",
+        "#newAccordionRow",
+        "#apex_offerDisplay_desktop",
+    )
+
+    def _is_inside_buybox(self, el) -> bool:
+        """Verifica se o elemento esta dentro de um container do buybox."""
+        for container_sel in self._BUYBOX_CONTAINERS:
+            if el.find_parent(id=container_sel.lstrip("#")):
+                return True
+        return False
+
     def _extract_price(self, soup) -> Optional[Decimal]:
         # Prioriza o preco de compra (priceToPay / base), ignorando parcelas
         # (apex-priceperunit-value) e o preco 'de' riscado (data-a-color=secondary).
+        # IMPORTANTE: todos os seletores sao escopados ao buybox para nao
+        # capturar precos de carrosseis ou produtos relacionados.
         priority = [
+            "#corePriceDisplay_desktop_feature_div span.a-price.priceToPay",
+            "#corePrice_feature_div span.a-price.priceToPay",
+            "#apex_desktop span.a-price.priceToPay",
+            "#buybox span.a-price.priceToPay",
             "span.a-price.priceToPay",
             "span.a-price.apex-pricetopay-value",
             "#corePriceDisplay_desktop_feature_div span.a-price[data-a-color='base']:not(.apex-priceperunit-value)",
             "#corePrice_feature_div span.a-price[data-a-color='base']:not(.apex-priceperunit-value)",
             "#apex_desktop span.a-price[data-a-color='base']:not(.apex-priceperunit-value)",
             "#buybox span.a-price:not(.apex-priceperunit-value)",
-            "span.a-price[data-a-color='base']:not(.apex-priceperunit-value)",
         ]
         for sel in priority:
             try:
@@ -187,16 +226,18 @@ class AmazonScraper:
                 classes = el.get("class") or []
                 if "apex-priceperunit-value" in classes:
                     continue
+                # Garantir que o elemento esta dentro do buybox
+                if not self._is_inside_buybox(el):
+                    continue
                 p = self._price_from_a_price(el)
                 if p is not None and p > 0:
                     return p
-        # Fallbacks (layouts antigos), pulando parcelas
+        # Fallbacks (layouts antigos), pulando parcelas — tambem escopados
         fallback = [
             "#priceblock_ourprice",
             "#priceblock_dealprice",
             "#price_inside_buybox",
             "#newBuyBoxPrice",
-            ".a-price .a-offscreen",
         ]
         for sel in fallback:
             try:

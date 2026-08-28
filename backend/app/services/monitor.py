@@ -7,7 +7,7 @@ from typing import Dict, Any, List, Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from backend.app.storage.json_storage import JsonStorage
 from backend.app.services.amazon import AmazonScraper
-from backend.app.services.discord import send_price_alert
+from backend.app.services.discord import send_price_alert, send_restock_alert
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +129,12 @@ class MonitorService:
             update_data["last_error"] = None
             update_data["last_error_at"] = None
             
+            # Detectar transicao de fora de estoque para disponivel
+            was_out_of_stock = (
+                monitor.get("availability") is False
+                or monitor.get("status") == "out_of_stock"
+            )
+            
             # --- FIX: Produto sem estoque nao atualiza preco nem dispara alerta ---
             if not availability:
                 update_data["status"] = "out_of_stock"
@@ -187,6 +193,28 @@ class MonitorService:
                         update_data["lowest_price"] = float(min(valid_prices))
                         update_data["highest_price"] = float(max(valid_prices))
                     
+                    # --- Notificar reposicao de estoque (OOS -> disponivel) ---
+                    if was_out_of_stock and availability:
+                        settings = self.storage.get_settings()
+                        default_webhook = os.environ.get("DISCORD_WEBHOOK") or settings.get("discord_webhook")
+                        webhook = default_webhook
+                        if not monitor.get("use_default_webhook"):
+                            webhook = monitor.get("discord_webhook") or default_webhook
+                        if webhook:
+                            send_restock_alert(
+                                webhook_url=webhook,
+                                product_name=monitor["name"],
+                                product_url=monitor["url"],
+                                image_url=result.get("image_url") or monitor.get("image_url"),
+                                current_price=current_price,
+                                target_price=target_price,
+                                currency=settings.get("currency", "BRL")
+                            )
+                        logger.info(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] Produto {monitor['asin']} "
+                            f"voltou ao estoque - R$ {current_price}"
+                        )
+
                     # Check target price drop
                     if current_price <= target_price:
                         if not alert_triggered:
