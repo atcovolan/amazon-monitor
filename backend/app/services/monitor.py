@@ -129,64 +129,100 @@ class MonitorService:
             update_data["last_error"] = None
             update_data["last_error_at"] = None
             
-            if scraped_price is not None:
-                current_price = Decimal(str(scraped_price))
-                previous_price = Decimal(str(monitor.get("current_price"))) if monitor.get("current_price") else None
-                
-                update_data["previous_price"] = float(previous_price) if previous_price else None
-                update_data["current_price"] = float(current_price)
-                
-                # Update high/low/average/etc. using history
+            # --- FIX: Produto sem estoque nao atualiza preco nem dispara alerta ---
+            if not availability:
+                update_data["status"] = "out_of_stock"
+                # Grava no historico apenas a indisponibilidade, sem preco
                 history_entry = {
-                    "price": float(current_price),
-                    "available": availability,
+                    "price": None,
+                    "available": False,
                     "checked_at": datetime.now().isoformat()
                 }
                 self.storage.append_history(monitor_id, history_entry)
+                logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Produto {monitor['asin']} indisponivel - alerta suprimido")
+            elif scraped_price is not None:
+                current_price = Decimal(str(scraped_price))
+                previous_price = Decimal(str(monitor.get("current_price"))) if monitor.get("current_price") else None
                 
+                # --- FIX: Validacao de sanidade do preco ---
+                # Se ja temos historico de precos, rejeitar coletas absurdamente
+                # baixas (< 20% do menor preco conhecido). Provavel erro de
+                # scraping (parcela, acessorio, elemento errado na pagina).
                 history = self.storage.get_history(monitor_id)
                 valid_prices = [Decimal(str(h["price"])) for h in history if h.get("price") is not None]
                 
-                if valid_prices:
-                    update_data["lowest_price"] = float(min(valid_prices))
-                    update_data["highest_price"] = float(max(valid_prices))
+                price_seems_valid = True
+                if valid_prices and len(valid_prices) >= 3:
+                    lowest_known = min(valid_prices)
+                    if lowest_known > 0 and current_price < lowest_known * Decimal("0.2"):
+                        price_seems_valid = False
+                        update_data["status"] = "error"
+                        update_data["last_error"] = (
+                            f"Preco coletado R$ {current_price:.2f} parece incorreto "
+                            f"(menor historico: R$ {lowest_known:.2f}). Coleta descartada."
+                        )
+                        update_data["last_error_at"] = datetime.now().isoformat()
+                        logger.warning(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] Preco suspeito para {monitor['asin']}: "
+                            f"R$ {current_price} vs minimo historico R$ {lowest_known} - descartado"
+                        )
                 
-                # Check target price drop
-                if current_price <= target_price:
-                    if not alert_triggered:
-                        # Send alert
-                        settings = self.storage.get_settings()
-                        default_webhook = os.environ.get("DISCORD_WEBHOOK") or settings.get("discord_webhook")
-                        webhook = default_webhook
-                        if not monitor.get("use_default_webhook"):
-                            webhook = monitor.get("discord_webhook") or default_webhook
-                            
-                        if webhook:
-                            # Send in background or awaitable
-                            send_price_alert(
-                                webhook_url=webhook,
-                                product_name=monitor["name"],
-                                product_url=monitor["url"],
-                                image_url=result.get("image_url") or monitor.get("image_url"),
-                                current_price=current_price,
-                                previous_price=previous_price,
-                                target_price=target_price,
-                                currency=settings.get("currency", "BRL")
-                            )
-                        else:
-                            logger.warning(f"Webhook não configurado para enviar alerta do monitor {monitor_id}")
-                        update_data["alert_triggered"] = True
-                else:
-                    # Reset alert trigger when price goes back above target
-                    update_data["alert_triggered"] = False
+                if price_seems_valid:
+                    update_data["previous_price"] = float(previous_price) if previous_price else None
+                    update_data["current_price"] = float(current_price)
                     
-                update_data["status"] = "target_reached" if current_price <= target_price else "monitoring"
-                logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Produto {monitor['asin']} verificado. Preço: {current_price}. Status: {update_data['status']}")
+                    # Update high/low/average/etc. using history
+                    history_entry = {
+                        "price": float(current_price),
+                        "available": availability,
+                        "checked_at": datetime.now().isoformat()
+                    }
+                    self.storage.append_history(monitor_id, history_entry)
+                    
+                    # Recalcular com o historico atualizado
+                    history = self.storage.get_history(monitor_id)
+                    valid_prices = [Decimal(str(h["price"])) for h in history if h.get("price") is not None]
+                    
+                    if valid_prices:
+                        update_data["lowest_price"] = float(min(valid_prices))
+                        update_data["highest_price"] = float(max(valid_prices))
+                    
+                    # Check target price drop
+                    if current_price <= target_price:
+                        if not alert_triggered:
+                            # Send alert
+                            settings = self.storage.get_settings()
+                            default_webhook = os.environ.get("DISCORD_WEBHOOK") or settings.get("discord_webhook")
+                            webhook = default_webhook
+                            if not monitor.get("use_default_webhook"):
+                                webhook = monitor.get("discord_webhook") or default_webhook
+                                
+                            if webhook:
+                                # Send in background or awaitable
+                                send_price_alert(
+                                    webhook_url=webhook,
+                                    product_name=monitor["name"],
+                                    product_url=monitor["url"],
+                                    image_url=result.get("image_url") or monitor.get("image_url"),
+                                    current_price=current_price,
+                                    previous_price=previous_price,
+                                    target_price=target_price,
+                                    currency=settings.get("currency", "BRL")
+                                )
+                            else:
+                                logger.warning(f"Webhook não configurado para enviar alerta do monitor {monitor_id}")
+                            update_data["alert_triggered"] = True
+                    else:
+                        # Reset alert trigger when price goes back above target
+                        update_data["alert_triggered"] = False
+                        
+                    update_data["status"] = "target_reached" if current_price <= target_price else "monitoring"
+                    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Produto {monitor['asin']} verificado. Preco: {current_price}. Status: {update_data['status']}")
             else:
-                update_data["status"] = "out_of_stock" if not availability else "error"
-                update_data["last_error"] = "Preço não encontrado na página"
+                update_data["status"] = "error"
+                update_data["last_error"] = "Preco nao encontrado na pagina"
                 update_data["last_error_at"] = datetime.now().isoformat()
-                logger.warning(f"[{datetime.now().strftime('%H:%M:%S')}] Preço não encontrado para {monitor['asin']}")
+                logger.warning(f"[{datetime.now().strftime('%H:%M:%S')}] Preco nao encontrado para {monitor['asin']}")
                 
         except Exception as e:
             update_data["status"] = "error"
