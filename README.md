@@ -1,52 +1,45 @@
 # Monitor de Preços Amazon
 
-Aplicação completa para monitorar preços de produtos da Amazon, com scraping resiliente, histórico de preços com gráficos, e alertas via webhook do Discord.
+Aplicação para monitorar preços de produtos da Amazon com scraping resiliente, histórico de preços com gráficos e alertas via Discord (preço alvo atingido e reposição de estoque).
 
-## Requisitos
+## Stack
 
-- [Miniconda](https://docs.conda.io/en/latest/miniconda.html) ou Anaconda instalado.
-- [Node.js](https://nodejs.org/) (versão 18+ recomendada) instalado.
+- **Backend**: Python 3.11 + FastAPI
+- **Frontend**: React + Vite + TypeScript
+- **Deploy**: Railway (Nixpacks)
 
-## Como Executar Localmente (Sem Docker)
+## Como Executar Localmente
 
-### 1. Iniciar o Backend (FastAPI)
+### 1. Backend (FastAPI)
 
-Abra o terminal (PowerShell ou Prompt de Comando) na raiz do projeto:
+```bash
+pip install -r backend/requirements.txt
+python -m uvicorn backend.app.main:app --reload
+```
 
-1. Ative o ambiente Conda:
-   ```bash
-   conda activate monitor-amazon
-   ```
-2. Execute o servidor de desenvolvimento a partir da raiz:
-   ```bash
-   python -m uvicorn backend.app.main:app --reload
-   ```
+Backend em `http://127.0.0.1:8000`.
 
-O backend estará rodando em `http://127.0.0.1:8000`.
+### 2. Frontend (React + Vite)
 
----
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-### 2. Iniciar o Frontend (React + Vite)
+Frontend em `http://localhost:5173`. O Vite faz proxy das chamadas `/api` para o backend na porta 8000.
 
-Abra outro terminal na raiz do projeto:
+## Deploy no Railway
 
-1. Mude para a pasta `frontend`:
-   ```bash
-   cd frontend
-   ```
-2. Execute o servidor de desenvolvimento:
-   ```bash
-   npm run dev
-   ```
+O projeto usa Nixpacks (configurado em `nixpacks.toml`). O push para o repositório dispara o deploy automaticamente.
 
-O frontend estará rodando em `http://localhost:5173`. O Vite está configurado para fazer o proxy de todas as chamadas `/api` automaticamente para o backend na porta `8000`.
+O build instala Node 20 + Python 3.11, compila o frontend React e serve tudo pelo backend com uvicorn.
 
----
+## Dados
 
-## Estrutura de Pastas de Dados (`data/`)
+Persistidos localmente na pasta `data/` (excluída do git):
 
-Os dados são persistidos localmente na raiz do projeto na pasta `data/`:
-- `data/settings.json`: Configurações gerais do sistema.
-- `data/monitors.json`: Produtos monitorados.
-- `data/history/{monitor_uuid}.json`: Histórico de variação de preços individual de cada produto.
-- `data/backups/`: Cópias automáticas de segurança criadas antes de alterações críticas.
+- `settings.json` — configurações gerais
+- `monitors.json` — produtos monitorados
+- `history/{id}.json` — histórico de preços por produto
+- `backups/` — cópias de segurança automáticas
